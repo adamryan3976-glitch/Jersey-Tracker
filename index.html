@@ -205,7 +205,7 @@
       <!-- Nav Button 3: Inventory -->
       <button onclick="switchScreen('inventory')" id="nav-inventory" class="flex flex-col items-center justify-center flex-1 h-full text-slate-400 font-semibold transition">
         <svg class="w-6 h-6 mb-1" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" d="M9 12h3.75M9 15h3.375M9 18h3.375m-6.408-11.261l3.116 1.01a1.125 1.125 0 01.765 1.066v8.32a1.125 1.125 0 01-1.492 1.065l-4.14-1.343a1.124 1.124 0 00-1.492 1.065V7.47a1.125 1.125 0 011.492-1.065l3.116 1.01zm9.643-2.74L15.3 4.54a1.125 1.125 0 01.765-1.065v8.32c0 .417-.23.799-.597.989L11.3 14.125a1.125 1.125 0 01-1.492-1.065V4.74a1.125 1.125 0 011.492-1.065l3.116 1.01z" />
+          <path stroke-linecap="round" stroke-linejoin="round" d="M9 12h3.75M9 15h3.375M9 18h3.375m-6.408-11.261l3.116 1.01a1.125 1.125 0 01.765 1.066v8.32a1.125 1.125 0 01-1.492 1.065l-4.14-1.343a1.124 1.124 0 00-1.492 1.065V7.47a1.125 1.125 0 011.492-1.065l3.116 1.01z" />
         </svg>
         <span class="text-xxs text-[10px]">Inventory</span>
       </button>
@@ -296,6 +296,27 @@
       in: []
     };
 
+    // --- Data Normalization Helpers (Type Safety Fixes) ---
+    function normalizeSport(sport) {
+      return String(sport || '').trim().toLowerCase();
+    }
+
+    function normalizeNumber(num) {
+      if (num === null || num === undefined) return '';
+      let s = String(num).trim();
+      // Handle floats automatically added by Google Sheets formatting (e.g. "10.0" -> "10")
+      if (!isNaN(s) && s.includes('.')) {
+        const parsed = parseFloat(s);
+        if (!isNaN(parsed)) {
+          s = String(parsed);
+        }
+      }
+      if (s.endsWith('.0')) {
+        s = s.substring(0, s.length - 2);
+      }
+      return s;
+    }
+
     // --- App Init ---
     window.addEventListener('DOMContentLoaded', () => {
       document.getElementById('setting-gas-url').value = appState.gasUrl;
@@ -317,7 +338,8 @@
       if (!appState.gasUrl) return;
       toggleLoading(true, "Fetching latest sheet data...");
       try {
-        const response = await fetch(`${appState.gasUrl}?action=getData`);
+        // Appended cache buster to bypass Safari page caching on iPhones
+        const response = await fetch(`${appState.gasUrl}?action=getData&_=${Date.now()}`);
         if (!response.ok) throw new Error('Network response returned an error status');
         const data = await response.json();
         
@@ -342,29 +364,33 @@
     }
 
     async function sendCloudWrite(action, payload) {
-      if (!appState.gasUrl) {
-        // Handle locally
-        const timestamp = new Date().toISOString();
-        if (action === 'assign') {
-          appState.out.push({
-            sport: payload.sport,
-            number: payload.number,
-            size: payload.size,
-            name: payload.name,
+      const timestamp = new Date().toISOString();
+      
+      // Optimistic UI Update: immediately reflect change in state to make the app feel instant!
+      if (action === 'assign') {
+        appState.out.push({
+          sport: payload.sport,
+          number: payload.number,
+          size: payload.size,
+          name: payload.name,
+          date: timestamp
+        });
+      } else if (action === 'collect') {
+        payload.forEach(item => {
+          appState.in.push({
+            sport: item.sport,
+            number: item.number,
+            size: item.size,
+            name: item.name,
             date: timestamp
           });
-        } else if (action === 'collect') {
-          payload.forEach(item => {
-            appState.in.push({
-              sport: item.sport,
-              number: item.number,
-              size: item.size,
-              name: item.name,
-              date: timestamp
-            });
-          });
-        }
-        syncUI();
+        });
+      }
+      
+      // Sync UI straight away so the assignment lists update instantly without waiting for Sheets
+      syncUI();
+
+      if (!appState.gasUrl) {
         showToast("✓ Saved locally", "success");
         return true;
       }
@@ -380,10 +406,10 @@
           body: JSON.stringify({ action, data: payload })
         });
         
-        // Due to no-cors mode, read data again after 1.5 seconds to refresh local state cleanly
+        // Wait 2.5 seconds to read data again to allow Google Sheets transactions to fully write/commit
         setTimeout(() => {
           fetchCloudData();
-        }, 1500);
+        }, 2500);
 
         return true;
       } catch (err) {
@@ -396,25 +422,21 @@
 
     // --- State Calculations ---
     function getActiveLoans() {
-      // Net loans computation:
-      // Loop over every Out instance. Track whether it matches a corresponding In instance.
-      // Match key is generated via Sport-Number-Index/Date sorting to prevent matching issues on repeat loans.
       let activeLoans = [];
       
-      // Map out history sorted by chronological index/date
       const sortedOut = [...appState.out];
       const sortedIn = [...appState.in];
       
-      // Let's pair them off safely.
-      // To find active status of each unique jersey:
-      // Find all physical jerseys first.
       appState.jerseys.forEach(jersey => {
-        const outList = sortedOut.filter(o => o.sport === jersey.sport && String(o.number) === String(jersey.number));
-        const inList = sortedIn.filter(i => i.sport === jersey.sport && String(i.number) === String(jersey.number));
+        const jSport = normalizeSport(jersey.sport);
+        const jNum = normalizeNumber(jersey.number);
         
-        // If it was checked out more times than returned, it is currently checked out to the last name on record.
+        // Utilized standardized normalizers to resolve type mismatch errors
+        const outList = sortedOut.filter(o => normalizeSport(o.sport) === jSport && normalizeNumber(o.number) === jNum);
+        const inList = sortedIn.filter(i => normalizeSport(i.sport) === jSport && normalizeNumber(i.number) === jNum);
+        
+        // If checked out more times than returned, it is out.
         if (outList.length > inList.length) {
-          // The current active checked out instance is the last one in the chronological Out list
           const activeInstance = outList[outList.length - 1];
           activeLoans.push({
             sport: jersey.sport,
@@ -462,9 +484,9 @@
       const activeLoans = getActiveLoans();
       
       const availableJerseys = appState.jerseys.filter(j => {
-        if (j.sport !== selectedSport) return false;
-        // Verify it isn't currently out
-        return !activeLoans.some(o => o.sport === selectedSport && String(o.number) === String(j.number));
+        if (normalizeSport(j.sport) !== normalizeSport(selectedSport)) return false;
+        // Verify it isn't currently out using type-safe normalizers
+        return !activeLoans.some(o => normalizeSport(o.sport) === normalizeSport(selectedSport) && normalizeNumber(o.number) === normalizeNumber(j.number));
       });
       
       if (availableJerseys.length === 0) {
@@ -544,13 +566,13 @@
       const outCountEl = document.getElementById('inv-out-count');
       
       // Filter current sport jerseys
-      const sportJerseys = appState.jerseys.filter(j => j.sport === selectedSport);
+      const sportJerseys = appState.jerseys.filter(j => normalizeSport(j.sport) === normalizeSport(selectedSport));
       
       const outJerseys = [];
       const inJerseys = [];
       
       sportJerseys.forEach(j => {
-        const match = activeLoans.find(loan => loan.sport === selectedSport && String(loan.number) === String(j.number));
+        const match = activeLoans.find(loan => normalizeSport(loan.sport) === normalizeSport(selectedSport) && normalizeNumber(loan.number) === normalizeNumber(j.number));
         if (match) {
           outJerseys.push({ ...j, name: match.name });
         } else {
@@ -683,6 +705,7 @@
       }
     }
 
+    // --- Utilities ---
     function toggleLoading(show, message = "Processing...") {
       const overlay = document.getElementById('loading-overlay');
       const text = document.getElementById('loading-text');
