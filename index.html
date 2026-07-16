@@ -1,745 +1,141 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-  <title>Jersey Tracker</title>
+/**
+ * Jersey Tracker Backend Script
+ * Paste this script directly inside Extensions -> Apps Script of your Google Sheet.
+ * Ensure your Google Sheet contains three sheets (tabs): "Jerseys", "Out", and "In".
+ * Once deployed as a Web App (Deploy -> New Deployment -> Web App), set the Access permission 
+ * to "Anyone" so the iPhone application can securely read and write data to your spreadsheets.
+ */
+
+function doGet(e) {
+  var action = e.parameter.action;
   
-  <!-- Apple Web App Meta Tags for iPhone Optimization -->
-  <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <meta name="apple-mobile-web-app-title" content="Jerseys">
+  if (action === "getData") {
+    return handleGetData();
+  }
   
-  <!-- Favicon & Home Screen Icons (SVG Data URIs) -->
-  <link class="favicon" rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%232563EB'/><text x='15' y='72' font-family='Arial, sans-serif' font-size='65' font-weight='bold' fill='white'>👕</text></svg>">
-  <link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='22' fill='%232563EB'/><text x='15' y='72' font-family='Arial, sans-serif' font-size='65' font-weight='bold' fill='white'>👕</text></svg>">
+  return ContentService.createTextOutput(JSON.stringify({ error: "Action not recognized" }))
+                       .setMimeType(ContentService.MimeType.JSON);
+}
 
-  <!-- Tailwind CSS CDN -->
-  <script src="https://cdn.tailwindcss.com"></script>
+function doPost(e) {
+  var result = { success: false };
+  try {
+    var requestData = JSON.parse(e.postData.contents);
+    var action = requestData.action;
+    var data = requestData.data;
+    
+    if (action === "assign") {
+      result.success = handleAssign(data);
+    } else if (action === "collect") {
+      result.success = handleCollect(data);
+    } else {
+      result.error = "Unknown action requested";
+    }
+  } catch (error) {
+    result.error = error.toString();
+  }
   
-  <style>
-    /* Safe Area Spacing for iOS Notch and Home Indicator */
-    .safe-top {
-      padding-top: env(safe-area-inset-top, 0px);
-    }
-    .safe-bottom {
-      padding-bottom: env(safe-area-inset-bottom, 0px);
-    }
-    /* Prevent text selection and blue highlight overlay on iOS tap */
-    * {
-      -webkit-tap-highlight-color: transparent;
-      user-select: none;
-    }
-    input {
-      user-select: text;
-    }
-  </style>
-</head>
-<body class="bg-slate-50 text-slate-900 font-sans antialiased flex flex-col min-h-screen">
+  // Return standard success output with CORS allowance (GAS handles CORS automatically with TextOutput)
+  return ContentService.createTextOutput(JSON.stringify(result))
+                       .setMimeType(ContentService.MimeType.JSON);
+}
 
-  <!-- Status / Connection Banner -->
-  <div id="connection-banner" class="bg-amber-500 text-white text-xs font-semibold px-4 py-2 safe-top text-center hidden flex items-center justify-center gap-2">
-    <span class="animate-pulse h-2 w-2 rounded-full bg-white"></span>
-    Using local demo mode. Configure your Web App URL in settings.
-  </div>
+function handleGetData() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  
+  var jerseysSheet = ss.getSheetByName("Jerseys");
+  var outSheet = ss.getSheetByName("Out");
+  var inSheet = ss.getSheetByName("In");
+  
+  var payload = {
+    jerseys: readSheetRows(jerseysSheet, ["sport", "number", "size"]),
+    out: readSheetRows(outSheet, ["sport", "number", "size", "name", "date"]),
+    in: readSheetRows(inSheet, ["sport", "number", "size", "name", "date"])
+  };
+  
+  return ContentService.createTextOutput(JSON.stringify(payload))
+                       .setMimeType(ContentService.MimeType.JSON);
+}
 
-  <!-- Main Header -->
-  <header class="bg-white border-b border-slate-200 sticky top-0 z-40 shadow-sm safe-top">
-    <div class="px-4 h-14 flex items-center justify-between">
-      <div class="flex items-center gap-2">
-        <div class="bg-blue-600 p-1.5 rounded-lg text-white">
-          <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M9.813 15.904L9 21m0 0l-.813-5.096L3 14.371l4.094-1.638 1.637-4.094L11.19 3q.3.435.617.874m0 0a15.82 15.82 0 013.123 5.364M11.808 3.874a15.821 15.821 0 00-3.123 5.364m3.123-5.364l1.094 3.123 3.123 1.094-3.123 1.094-1.094 3.123z" />
-          </svg>
-        </div>
-        <h1 class="text-lg font-bold tracking-tight text-slate-800">Jersey Tracker</h1>
-      </div>
-      
-      <!-- Settings Cog Button -->
-      <button onclick="toggleModal('settings-modal', true)" class="p-2 text-slate-500 hover:text-slate-800 transition">
-        <svg class="w-6 h-6" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-          <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-        </svg>
-      </button>
-    </div>
-  </header>
+function handleAssign(data) {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var outSheet = ss.getSheetByName("Out");
+  
+  if (!outSheet) return false;
+  
+  // Format dates consistently as ISO string timestamps
+  var timestamp = new Date().toISOString();
+  
+  outSheet.appendRow([
+    data.sport,
+    data.number,
+    data.size,
+    data.name,
+    timestamp
+  ]);
+  
+  return true;
+}
 
-  <!-- Main Scrollable App Container -->
-  <main class="flex-grow overflow-y-auto px-4 py-5 pb-32 max-w-lg mx-auto w-full">
+function handleCollect(dataList) {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var inSheet = ss.getSheetByName("In");
+  
+  if (!inSheet || !Array.isArray(dataList)) return false;
+  
+  var timestamp = new Date().toISOString();
+  
+  dataList.forEach(function(item) {
+    inSheet.appendRow([
+      item.sport,
+      item.number,
+      item.size,
+      item.name,
+      timestamp
+    ]);
+  });
+  
+  return true;
+}
 
-    <!-- Screen 1: Assign Jerseys -->
-    <section id="screen-assign" class="space-y-4">
-      <div class="mb-2">
-        <h2 class="text-xl font-extrabold text-slate-800">Assign Jerseys</h2>
-        <p class="text-sm text-slate-500">Loan a jersey to a student athlete</p>
-      </div>
-
-      <form id="assign-form" onsubmit="handleAssignSubmit(event)" class="space-y-4 bg-white p-5 rounded-2xl border border-slate-200/80 shadow-sm">
-        <div>
-          <label class="block text-xs font-bold uppercase tracking-wider text-slate-500 mb-1.5">Select Sport</label>
-          <select id="assign-sport" onchange="onAssignSportChange()" class="w-full bg-slate-100 border border-slate-200 text-slate-800 py-3 px-4 rounded-xl focus:ring-2 focus:ring-blue-500 focus:outline-none appearance-none font-medium">
-            <!-- Populated via dynamic state -->
-          </select>
-        </div>
-
-        <div>
-          <label class="block text-xs font-bold uppercase tracking-wider text-slate-500 mb-1.5">Select Jersey Number</label>
-          <select id="assign-number" class="w-full bg-slate-100 border border-slate-200 text-slate-800 py-3 px-4 rounded-xl focus:ring-2 focus:ring-blue-500 focus:outline-none appearance-none font-medium">
-            <!-- Populated based on selected sport -->
-          </select>
-        </div>
-
-        <div>
-          <label class="block text-xs font-bold uppercase tracking-wider text-slate-500 mb-1.5">Student Athlete Name</label>
-          <input id="assign-student" type="text" placeholder="e.g. John Doe" required class="w-full bg-slate-100 border border-slate-200 text-slate-800 py-3 px-4 rounded-xl focus:ring-2 focus:ring-blue-500 focus:outline-none font-medium placeholder-slate-400">
-        </div>
-
-        <button type="submit" class="w-full bg-blue-600 hover:bg-blue-700 active:scale-[0.98] transition-transform text-white font-semibold py-3.5 px-4 rounded-xl shadow-md shadow-blue-500/20 flex items-center justify-center gap-2 mt-2">
-          <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
-          </svg>
-          Assign Jersey
-        </button>
-      </form>
-    </section>
-
-
-    <!-- Screen 2: Collect Jerseys -->
-    <section id="screen-collect" class="space-y-4 hidden">
-      <div class="mb-2">
-        <h2 class="text-xl font-extrabold text-slate-800">Collect Jerseys</h2>
-        <p class="text-sm text-slate-500">Log returned jerseys into the system</p>
-      </div>
-
-      <div class="bg-white rounded-2xl border border-slate-200/80 shadow-sm overflow-hidden">
-        <div class="px-5 py-4 border-b border-slate-100 bg-slate-50/50 flex items-center justify-between">
-          <span class="text-xs font-bold uppercase tracking-wider text-slate-500">Out with Athletes</span>
-          <span id="collect-count" class="bg-amber-100 text-amber-800 text-xs font-bold px-2.5 py-0.5 rounded-full">0 Assigned</span>
-        </div>
-
-        <form id="collect-form" onsubmit="handleCollectSubmit(event)">
-          <div id="collect-list" class="divide-y divide-slate-100 max-h-[350px] overflow-y-auto">
-            <!-- Populated via current active loans -->
-          </div>
-
-          <div class="p-4 border-t border-slate-100 bg-white">
-            <button id="collect-submit-btn" type="submit" disabled class="w-full bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 disabled:shadow-none active:scale-[0.98] transition-transform text-white font-semibold py-3.5 px-4 rounded-xl shadow-md shadow-emerald-500/10 flex items-center justify-center gap-2">
-              <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-              </svg>
-              Mark Selected as Returned
-            </button>
-          </div>
-        </form>
-      </div>
-    </section>
-
-
-    <!-- Screen 3: Current Inventory -->
-    <section id="screen-inventory" class="space-y-4 hidden">
-      <div class="mb-2">
-        <h2 class="text-xl font-extrabold text-slate-800">Current Inventory</h2>
-        <p class="text-sm text-slate-500">Live view of jerseys grouped by status</p>
-      </div>
-
-      <!-- Sport Filter Bar -->
-      <div class="bg-white p-3 rounded-2xl border border-slate-200/80 shadow-sm">
-        <label class="block text-xs font-bold uppercase tracking-wider text-slate-500 mb-1.5">Filter by Sport</label>
-        <select id="inventory-sport" onchange="renderInventory()" class="w-full bg-slate-100 border border-slate-200 text-slate-800 py-3 px-4 rounded-xl focus:ring-2 focus:ring-blue-500 focus:outline-none appearance-none font-medium">
-          <!-- Populated dynamically -->
-        </select>
-      </div>
-
-      <!-- Inventory Grid Panels -->
-      <div class="grid grid-cols-2 gap-3">
-        <!-- Status: IN -->
-        <div class="bg-white rounded-2xl border border-slate-200/80 shadow-sm overflow-hidden flex flex-col">
-          <div class="bg-emerald-500 px-4 py-3 text-white flex items-center justify-between">
-            <span class="font-bold text-sm">IN STOCK</span>
-            <span id="inv-in-count" class="bg-emerald-600/50 text-white text-xs font-bold px-2 py-0.5 rounded-full">0</span>
-          </div>
-          <div id="inv-in-list" class="p-3 space-y-2 flex-grow overflow-y-auto max-h-[350px]">
-            <!-- List of available jerseys -->
-          </div>
-        </div>
-
-        <!-- Status: OUT -->
-        <div class="bg-white rounded-2xl border border-slate-200/80 shadow-sm overflow-hidden flex flex-col">
-          <div class="bg-amber-500 px-4 py-3 text-white flex items-center justify-between">
-            <span class="font-bold text-sm">LOANED OUT</span>
-            <span id="inv-out-count" class="bg-amber-600/50 text-white text-xs font-bold px-2 py-0.5 rounded-full">0</span>
-          </div>
-          <div id="inv-out-list" class="p-3 space-y-2 flex-grow overflow-y-auto max-h-[350px]">
-            <!-- List of loaned out jerseys -->
-          </div>
-        </div>
-      </div>
-    </section>
-
-  </main>
-
-  <!-- Safe area bottom padding tab spacer -->
-  <div class="h-16 safe-bottom"></div>
-
-  <!-- iOS-Style Bottom Navigation Bar -->
-  <nav class="bg-white/95 backdrop-blur-md border-t border-slate-200 fixed bottom-0 left-0 right-0 z-40 safe-bottom">
-    <div class="max-w-lg mx-auto flex h-16 items-center justify-around px-4">
-      
-      <!-- Nav Button 1: Assign -->
-      <button onclick="switchScreen('assign')" id="nav-assign" class="flex flex-col items-center justify-center flex-1 h-full text-blue-600 font-semibold transition">
-        <svg class="w-6 h-6 mb-1" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" d="M18 18.72a9.094 9.094 0 003.741-.479 3 3 0 00-4.682-2.72m.94 3.198l.001.031c0 .225-.012.447-.037.666A11.944 11.944 0 0112 21c-2.17 0-4.207-.576-5.963-1.584A6.062 6.062 0 016 18.719m12 0a5.971 5.971 0 00-.941-3.197m0 0A5.995 5.995 0 0012 12.75a5.995 5.995 0 00-5.058 2.772m0 0a3 3 0 00-4.681 2.72 8.986 8.986 0 003.74.477m.94-3.197a5.971 5.971 0 00-.94 3.197M15 6.75a3 3 0 11-6 0 3 3 0 016 0zm6 3a2.25 2.25 0 11-4.5 0 2.25 2.25 0 014.5 0zm-13.5 0a2.25 2.25 0 11-4.5 0 2.25 2.25 0 014.5 0z" />
-        </svg>
-        <span class="text-xxs text-[10px]">Assign</span>
-      </button>
-
-      <!-- Nav Button 2: Collect -->
-      <button onclick="switchScreen('collect')" id="nav-collect" class="flex flex-col items-center justify-center flex-1 h-full text-slate-400 font-semibold transition">
-        <svg class="w-6 h-6 mb-1" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-        </svg>
-        <span class="text-xxs text-[10px]">Collect</span>
-      </button>
-
-      <!-- Nav Button 3: Inventory -->
-      <button onclick="switchScreen('inventory')" id="nav-inventory" class="flex flex-col items-center justify-center flex-1 h-full text-slate-400 font-semibold transition">
-        <svg class="w-6 h-6 mb-1" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" d="M9 12h3.75M9 15h3.375M9 18h3.375m-6.408-11.261l3.116 1.01a1.125 1.125 0 01.765 1.066v8.32a1.125 1.125 0 01-1.492 1.065l-4.14-1.343a1.124 1.124 0 00-1.492 1.065V7.47a1.125 1.125 0 011.492-1.065l3.116 1.01z" />
-        </svg>
-        <span class="text-xxs text-[10px]">Inventory</span>
-      </button>
-
-    </div>
-  </nav>
-
-  <!-- Settings & Config Modal -->
-  <div id="settings-modal" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 hidden">
-    <div class="bg-white rounded-2xl w-full max-w-sm overflow-hidden shadow-2xl border border-slate-150 animate-in fade-in zoom-in duration-200">
-      <div class="px-5 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-50">
-        <h3 class="font-bold text-slate-800 flex items-center gap-2">
-          <svg class="w-5 h-5 text-blue-600" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M12 21a9.004 9.004 0 008.716-6.747M12 21a9.004 9.004 0 01-8.716-6.747M12 21c2.485 0 4.5-4.03 4.5-9S14.485 3 12 3m0 18c-2.485 0-4.5-4.03-4.5-9S9.515 3 12 3m0 0a8.997 8.997 0 017.843 4.582M12 3a8.997 8.997 0 00-7.843 4.582m15.686 0A11.953 11.953 0 0112 10.5c-2.998 0-5.74-1.1-7.843-2.918m15.686 0A8.959 8.959 0 0121 12c0 .778-.099 1.533-.284 2.253m0 0A17.919 17.919 0 0112 16.5c-3.162 0-6.133-.815-8.716-2.247m0 0A9.015 9.015 0 013 12c0-.778.099-1.533.284-2.253" />
-          </svg>
-          Sync Settings
-        </h3>
-        <button onclick="toggleModal('settings-modal', false)" class="text-slate-400 hover:text-slate-600">
-          <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
-          </svg>
-        </button>
-      </div>
-      <div class="p-5 space-y-4">
-        <div>
-          <label class="block text-xs font-bold uppercase tracking-wider text-slate-500 mb-1.5">Google Web App URL</label>
-          <input id="setting-gas-url" type="url" placeholder="https://script.google.com/macros/s/.../exec" class="w-full bg-slate-100 border border-slate-200 text-slate-800 py-3 px-4 rounded-xl focus:ring-2 focus:ring-blue-500 focus:outline-none text-sm">
-          <p class="text-[11px] text-slate-400 mt-1.5 leading-relaxed">Paste the deployment URL of your Google Apps Script Web App here to sync changes directly with your Google Sheet.</p>
-        </div>
-      </div>
-      <div class="px-5 py-4 border-t border-slate-100 bg-slate-50 flex items-center justify-end gap-2">
-        <button onclick="toggleModal('settings-modal', false)" class="px-4 py-2 text-slate-600 font-semibold text-sm hover:bg-slate-100 rounded-lg">Cancel</button>
-        <button onclick="saveSettings()" class="px-5 py-2 bg-blue-600 text-white font-semibold text-sm hover:bg-blue-700 rounded-lg shadow-sm shadow-blue-500/10">Save Settings</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- Loading Overlay -->
-  <div id="loading-overlay" class="fixed inset-0 bg-slate-900/45 backdrop-blur-[2px] z-50 flex flex-col items-center justify-center hidden">
-    <div class="bg-white p-5 rounded-2xl shadow-xl flex flex-col items-center gap-3">
-      <svg class="animate-spin h-8 w-8 text-blue-600" fill="none" viewBox="0 0 24 24">
-        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-      </svg>
-      <span class="text-sm font-semibold text-slate-700" id="loading-text">Syncing with Google...</span>
-    </div>
-  </div>
-
-  <!-- Custom Alert Banner / Notification Toast -->
-  <div id="toast" class="fixed top-5 left-1/2 -translate-x-1/2 z-50 transform translate-y-[-100px] opacity-0 transition-all duration-300 max-w-sm w-[90%] bg-slate-900 text-white text-sm font-semibold px-5 py-4 rounded-xl shadow-xl flex items-center gap-3">
-    <span id="toast-icon"></span>
-    <span id="toast-message" class="flex-grow"></span>
-  </div>
-
-  <!-- Main Controller Logic -->
-  <script>
-    // --- Local Fallback/Demo Data ---
-    const DEMO_JERSEYS = [
-      { sport: "volleyball", number: "1", size: "S" },
-      { sport: "volleyball", number: "2", size: "M" },
-      { sport: "volleyball", number: "3", size: "L" },
-      { sport: "volleyball", number: "4", size: "XL" },
-      { sport: "volleyball", number: "5", size: "S" },
-      { sport: "volleyball", number: "6", size: "M" },
-      { sport: "volleyball", number: "7", size: "L" },
-      { sport: "volleyball", number: "8", size: "XL" },
-      { sport: "baskeyball", number: "10", size: "S" },
-      { sport: "baskeyball", number: "20", size: "M" },
-      { sport: "baskeyball", number: "15", size: "L" },
-      { sport: "baskeyball", number: "78", size: "XL" }
-    ];
-
-    let DEMO_OUT = [
-      { sport: "volleyball", number: "2", size: "M", name: "Alex Morgan", date: "2026-07-15T12:00:00.000Z" },
-      { sport: "volleyball", number: "3", size: "L", name: "Sam Kerr", date: "2026-07-15T13:00:00.000Z" },
-      { sport: "baskeyball", number: "15", size: "L", name: "LeBron James", date: "2026-07-16T10:00:00.000Z" }
-    ];
-
-    let DEMO_IN = [
-      { sport: "volleyball", number: "2", size: "M", name: "Alex Morgan", date: "2026-07-15T15:00:00.000Z" }
-    ];
-
-    // --- State Variables ---
-    let appState = {
-      gasUrl: localStorage.getItem("gas_jersey_tracker_url") || "https://script.google.com/macros/s/AKfycbwMAY_QeyEYguj9rKLGVz0n4QTjMlW9isJ1S-AcXssCriTSIky8U2pMyJyWCDbftuHQvQ/exec",
-      jerseys: [],
-      out: [],
-      in: []
-    };
-
-    // --- Data Normalization Helpers (Type Safety Fixes) ---
-    function normalizeSport(sport) {
-      return String(sport || '').trim().toLowerCase();
-    }
-
-    function normalizeNumber(num) {
-      if (num === null || num === undefined) return '';
-      let s = String(num).trim();
-      // Handle floats automatically added by Google Sheets formatting (e.g. "10.0" -> "10")
-      if (!isNaN(s) && s.includes('.')) {
-        const parsed = parseFloat(s);
-        if (!isNaN(parsed)) {
-          s = String(parsed);
-        }
-      }
-      if (s.endsWith('.0')) {
-        s = s.substring(0, s.length - 2);
-      }
-      return s;
-    }
-
-    // --- App Init ---
-    window.addEventListener('DOMContentLoaded', () => {
-      document.getElementById('setting-gas-url').value = appState.gasUrl;
-      
-      if (!appState.gasUrl) {
-        document.getElementById('connection-banner').classList.remove('hidden');
-        // Load demo datasets
-        appState.jerseys = [...DEMO_JERSEYS];
-        appState.out = [...DEMO_OUT];
-        appState.in = [...DEMO_IN];
-        syncUI();
+/**
+ * Generic helper to extract key-value row arrays from specified sheets.
+ * Dynamically handles presence or absence of a header row.
+ */
+function readSheetRows(sheet, headers) {
+  if (!sheet) return [];
+  
+  var lastRow = sheet.getLastRow();
+  if (lastRow < 1) return []; // Completely empty sheet
+  
+  var numCols = headers.length;
+  var startRow = 1;
+  
+  // Read first row to detect if it contains headers
+  var firstRowValues = sheet.getRange(1, 1, 1, numCols).getValues()[0];
+  var firstCell = String(firstRowValues[0]).toLowerCase().trim();
+  
+  // If first row cell matches "sport", it is a header row -> skip to Row 2
+  if (firstCell === "sport") {
+    startRow = 2;
+  }
+  
+  var numRowsToRead = lastRow - startRow + 1;
+  if (numRowsToRead < 1) return []; // No data rows present
+  
+  var rangeValues = sheet.getRange(startRow, 1, numRowsToRead, numCols).getValues();
+  
+  return rangeValues.map(function(row) {
+    var obj = {};
+    headers.forEach(function(headerName, index) {
+      var cellVal = row[index];
+      // Format Google Sheets dates cleanly to standardized ISO Strings for Apple Safari
+      if (cellVal instanceof Date) {
+        obj[headerName] = cellVal.toISOString();
       } else {
-        fetchCloudData();
+        obj[headerName] = cellVal;
       }
     });
-
-    // --- Cloud Syncing ---
-    async function fetchCloudData() {
-      if (!appState.gasUrl) return;
-      toggleLoading(true, "Fetching latest sheet data...");
-      try {
-        // Appended cache buster to bypass Safari page caching on iPhones
-        const response = await fetch(`${appState.gasUrl}?action=getData&_=${Date.now()}`);
-        if (!response.ok) throw new Error('Network response returned an error status');
-        const data = await response.json();
-        
-        appState.jerseys = data.jerseys || [];
-        appState.out = data.out || [];
-        appState.in = data.in || [];
-        
-        document.getElementById('connection-banner').classList.add('hidden');
-        syncUI();
-        showToast("✓ Successfully loaded data from Sheets", "success");
-      } catch (err) {
-        console.error("Cloud synchronization failed:", err);
-        showToast("⚠ Failed to load from Sheets. Running fallback.", "error");
-        // Fallback
-        appState.jerseys = [...DEMO_JERSEYS];
-        appState.out = [...DEMO_OUT];
-        appState.in = [...DEMO_IN];
-        syncUI();
-      } finally {
-        toggleLoading(false);
-      }
-    }
-
-    async function sendCloudWrite(action, payload) {
-      const timestamp = new Date().toISOString();
-      
-      // Optimistic UI Update: immediately reflect change in state to make the app feel instant!
-      if (action === 'assign') {
-        appState.out.push({
-          sport: payload.sport,
-          number: payload.number,
-          size: payload.size,
-          name: payload.name,
-          date: timestamp
-        });
-      } else if (action === 'collect') {
-        payload.forEach(item => {
-          appState.in.push({
-            sport: item.sport,
-            number: item.number,
-            size: item.size,
-            name: item.name,
-            date: timestamp
-          });
-        });
-      }
-      
-      // Sync UI straight away so the assignment lists update instantly without waiting for Sheets
-      syncUI();
-
-      if (!appState.gasUrl) {
-        showToast("✓ Saved locally", "success");
-        return true;
-      }
-
-      toggleLoading(true, "Syncing changes to Google...");
-      try {
-        const response = await fetch(appState.gasUrl, {
-          method: 'POST',
-          mode: 'no-cors', // Essential for GAS endpoints to complete securely on iOS without strict preflights
-          headers: {
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({ action, data: payload })
-        });
-        
-        // Wait 2.5 seconds to read data again to allow Google Sheets transactions to fully write/commit
-        setTimeout(() => {
-          fetchCloudData();
-        }, 2500);
-
-        return true;
-      } catch (err) {
-        console.error("Cloud write operation failed:", err);
-        showToast("⚠ Sync error. Please try again.", "error");
-        toggleLoading(false);
-        return false;
-      }
-    }
-
-    // --- State Calculations ---
-    function getActiveLoans() {
-      let activeLoans = [];
-      
-      const sortedOut = [...appState.out];
-      const sortedIn = [...appState.in];
-      
-      appState.jerseys.forEach(jersey => {
-        const jSport = normalizeSport(jersey.sport);
-        const jNum = normalizeNumber(jersey.number);
-        
-        // Utilized standardized normalizers to resolve type mismatch errors
-        const outList = sortedOut.filter(o => normalizeSport(o.sport) === jSport && normalizeNumber(o.number) === jNum);
-        const inList = sortedIn.filter(i => normalizeSport(i.sport) === jSport && normalizeNumber(i.number) === jNum);
-        
-        // If checked out more times than returned, it is out.
-        if (outList.length > inList.length) {
-          const activeInstance = outList[outList.length - 1];
-          activeLoans.push({
-            sport: jersey.sport,
-            number: jersey.number,
-            size: jersey.size,
-            name: activeInstance.name,
-            date: activeInstance.date
-          });
-        }
-      });
-      
-      return activeLoans;
-    }
-
-    // --- UI Synchronizer ---
-    function syncUI() {
-      // 1. Populate Sports dropdowns
-      const uniqueSports = [...new Set(appState.jerseys.map(j => j.sport))];
-      
-      const assignSportSelect = document.getElementById('assign-sport');
-      const inventorySportSelect = document.getElementById('inventory-sport');
-      
-      const prevAssignSportVal = assignSportSelect.value;
-      const prevInventorySportVal = inventorySportSelect.value;
-      
-      assignSportSelect.innerHTML = uniqueSports.map(s => `<option value="${s}">${capitalize(s)}</option>`).join('');
-      inventorySportSelect.innerHTML = uniqueSports.map(s => `<option value="${s}">${capitalize(s)}</option>`).join('');
-      
-      // Restore previous selections or default
-      if (uniqueSports.includes(prevAssignSportVal)) assignSportSelect.value = prevAssignSportVal;
-      if (uniqueSports.includes(prevInventorySportVal)) inventorySportSelect.value = prevInventorySportVal;
-      
-      // 2. Refresh lists based on the selections
-      onAssignSportChange();
-      renderCollectList();
-      renderInventory();
-    }
-
-    // Form Dropdown Updates
-    function onAssignSportChange() {
-      const selectedSport = document.getElementById('assign-sport').value;
-      const numberSelect = document.getElementById('assign-number');
-      
-      // Filter out active loans of this sport (they are out, hence cannot be assigned)
-      const activeLoans = getActiveLoans();
-      
-      const availableJerseys = appState.jerseys.filter(j => {
-        if (normalizeSport(j.sport) !== normalizeSport(selectedSport)) return false;
-        // Verify it isn't currently out using type-safe normalizers
-        return !activeLoans.some(o => normalizeSport(o.sport) === normalizeSport(selectedSport) && normalizeNumber(o.number) === normalizeNumber(j.number));
-      });
-      
-      if (availableJerseys.length === 0) {
-        numberSelect.innerHTML = `<option value="">No jerseys in stock</option>`;
-      } else {
-        numberSelect.innerHTML = availableJerseys.map(j => 
-          `<option value="${j.number}" data-size="${j.size}">#${j.number} (Size: ${j.size})</option>`
-        ).join('');
-      }
-    }
-
-    // Screen Render: Collect List
-    function renderCollectList() {
-      const activeLoans = getActiveLoans();
-      const listEl = document.getElementById('collect-list');
-      const countEl = document.getElementById('collect-count');
-      const submitBtn = document.getElementById('collect-submit-btn');
-      
-      countEl.textContent = `${activeLoans.length} Assigned`;
-      
-      if (activeLoans.length === 0) {
-        listEl.innerHTML = `
-          <div class="p-8 text-center text-slate-400">
-            <svg class="w-10 h-10 mx-auto text-slate-300 mb-2" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5" />
-            </svg>
-            <p class="text-sm font-medium">All jerseys are returned</p>
-          </div>
-        `;
-        submitBtn.disabled = true;
-        return;
-      }
-      
-      listEl.innerHTML = activeLoans.map((loan, index) => {
-        const formattedDate = new Date(loan.date).toLocaleDateString([], { month: 'short', day: 'numeric' });
-        return `
-          <label class="flex items-center justify-between px-5 py-4 cursor-pointer hover:bg-slate-50 transition active:bg-slate-100">
-            <div class="flex items-center gap-3">
-              <input type="checkbox" name="collect-item" value="${index}" 
-                data-sport="${loan.sport}" 
-                data-number="${loan.number}" 
-                data-size="${loan.size}" 
-                data-name="${loan.name}"
-                onchange="updateCollectSubmitButtonState()"
-                class="w-5 h-5 rounded border-slate-300 text-blue-600 focus:ring-blue-500">
-              <div class="leading-tight">
-                <div class="font-bold text-slate-800">#${loan.number} <span class="text-xs font-semibold text-slate-400 ml-1">Size ${loan.size}</span></div>
-                <div class="text-xs font-semibold text-slate-500 uppercase tracking-wide">${capitalize(loan.sport)}</div>
-              </div>
-            </div>
-            <div class="text-right leading-tight">
-              <div class="text-sm font-semibold text-blue-600">${loan.name}</div>
-              <div class="text-[10px] font-medium text-slate-400">Out: ${formattedDate}</div>
-            </div>
-          </label>
-        `;
-      }).join('');
-      
-      updateCollectSubmitButtonState();
-    }
-
-    function updateCollectSubmitButtonState() {
-      const submitBtn = document.getElementById('collect-submit-btn');
-      const checkBoxes = document.querySelectorAll('input[name="collect-item"]:checked');
-      submitBtn.disabled = checkBoxes.length === 0;
-    }
-
-    // Screen Render: Inventory Status
-    function renderInventory() {
-      const selectedSport = document.getElementById('inventory-sport').value;
-      const activeLoans = getActiveLoans();
-      
-      const inListEl = document.getElementById('inv-in-list');
-      const outListEl = document.getElementById('inv-out-list');
-      
-      const inCountEl = document.getElementById('inv-in-count');
-      const outCountEl = document.getElementById('inv-out-count');
-      
-      // Filter current sport jerseys
-      const sportJerseys = appState.jerseys.filter(j => normalizeSport(j.sport) === normalizeSport(selectedSport));
-      
-      const outJerseys = [];
-      const inJerseys = [];
-      
-      sportJerseys.forEach(j => {
-        const match = activeLoans.find(loan => normalizeSport(loan.sport) === normalizeSport(selectedSport) && normalizeNumber(loan.number) === normalizeNumber(j.number));
-        if (match) {
-          outJerseys.push({ ...j, name: match.name });
-        } else {
-          inJerseys.push(j);
-        }
-      });
-      
-      inCountEl.textContent = inJerseys.length;
-      outCountEl.textContent = outJerseys.length;
-      
-      // Render available list
-      if (inJerseys.length === 0) {
-        inListEl.innerHTML = `<p class="text-center text-xs text-slate-400 py-4 font-medium">None available</p>`;
-      } else {
-        inListEl.innerHTML = inJerseys.map(j => `
-          <div class="flex items-center justify-between p-2.5 bg-slate-100 rounded-xl border border-slate-200/50">
-            <span class="font-bold text-slate-700 text-sm">#${j.number}</span>
-            <span class="bg-slate-200 text-slate-600 text-[10px] font-bold px-2 py-0.5 rounded-md">Size ${j.size}</span>
-          </div>
-        `).join('');
-      }
-      
-      // Render loaned out list
-      if (outJerseys.length === 0) {
-        outListEl.innerHTML = `<p class="text-center text-xs text-slate-400 py-4 font-medium">None assigned</p>`;
-      } else {
-        outListEl.innerHTML = outJerseys.map(j => `
-          <div class="flex flex-col p-2.5 bg-slate-100 rounded-xl border border-slate-200/50 leading-tight">
-            <div class="flex items-center justify-between mb-0.5">
-              <span class="font-bold text-slate-700 text-sm">#${j.number}</span>
-              <span class="bg-amber-100 text-amber-700 text-[9px] font-bold px-1.5 py-0.5 rounded-md">Size ${j.size}</span>
-            </div>
-            <span class="text-[11px] font-semibold text-blue-600 truncate">${j.name}</span>
-          </div>
-        `).join('');
-      }
-    }
-
-    // --- Action Submissions ---
-    async function handleAssignSubmit(e) {
-      e.preventDefault();
-      
-      const sport = document.getElementById('assign-sport').value;
-      const number = document.getElementById('assign-number').value;
-      const name = document.getElementById('assign-student').value.trim();
-      
-      if (!sport || !number || !name) {
-        showToast("Please fill out all fields", "error");
-        return;
-      }
-      
-      // Find size based on selected jersey number
-      const opt = document.querySelector(`#assign-number option[value="${number}"]`);
-      const size = opt ? opt.getAttribute('data-size') : "M";
-      
-      const success = await sendCloudWrite('assign', { sport, number, size, name });
-      if (success) {
-        document.getElementById('assign-student').value = "";
-        showToast("✓ Jersey successfully assigned!", "success");
-      }
-    }
-
-    async function handleCollectSubmit(e) {
-      e.preventDefault();
-      
-      const selectedBoxes = document.querySelectorAll('input[name="collect-item"]:checked');
-      if (selectedBoxes.length === 0) return;
-      
-      const itemsToReturn = Array.from(selectedBoxes).map(cb => ({
-        sport: cb.getAttribute('data-sport'),
-        number: cb.getAttribute('data-number'),
-        size: cb.getAttribute('data-size'),
-        name: cb.getAttribute('data-name')
-      }));
-      
-      const success = await sendCloudWrite('collect', itemsToReturn);
-      if (success) {
-        showToast(`✓ Checked in ${itemsToReturn.length} jersey(s)!`, "success");
-      }
-    }
-
-    // --- Tab Navigation Screen Controller ---
-    function switchScreen(screenId) {
-      const screens = ['assign', 'collect', 'inventory'];
-      screens.forEach(s => {
-        const section = document.getElementById(`screen-${s}`);
-        const navBtn = document.getElementById(`nav-${s}`);
-        if (s === screenId) {
-          section.classList.remove('hidden');
-          navBtn.classList.remove('text-slate-400');
-          navBtn.classList.add('text-blue-600');
-        } else {
-          section.classList.add('hidden');
-          navBtn.classList.remove('text-blue-600');
-          navBtn.classList.add('text-slate-400');
-        }
-      });
-      
-      // Run quick UI updates specifically on screens load to guarantee real-time updates
-      if (screenId === 'collect') renderCollectList();
-      if (screenId === 'inventory') renderInventory();
-    }
-
-    // --- Modals & Global UI Functions ---
-    function toggleModal(modalId, show) {
-      const modal = document.getElementById(modalId);
-      if (show) {
-        modal.classList.remove('hidden');
-      } else {
-        modal.classList.add('hidden');
-      }
-    }
-
-    function saveSettings() {
-      const urlInput = document.getElementById('setting-gas-url').value.trim();
-      localStorage.setItem("gas_jersey_tracker_url", urlInput);
-      appState.gasUrl = urlInput;
-      
-      toggleModal('settings-modal', false);
-      
-      if (urlInput) {
-        fetchCloudData();
-      } else {
-        document.getElementById('connection-banner').classList.remove('hidden');
-        appState.jerseys = [...DEMO_JERSEYS];
-        appState.out = [...DEMO_OUT];
-        appState.in = [...DEMO_IN];
-        syncUI();
-        showToast("Switched to demo mode", "success");
-      }
-    }
-
-    // --- Utilities ---
-    function toggleLoading(show, message = "Processing...") {
-      const overlay = document.getElementById('loading-overlay');
-      const text = document.getElementById('loading-text');
-      text.textContent = message;
-      if (show) {
-        overlay.classList.remove('hidden');
-      } else {
-        overlay.classList.add('hidden');
-      }
-    }
-
-    function showToast(message, type = "success") {
-      const toast = document.getElementById('toast');
-      const icon = document.getElementById('toast-icon');
-      const msg = document.getElementById('toast-message');
-      
-      msg.textContent = message;
-      if (type === "success") {
-        icon.innerHTML = `<span class="text-emerald-500 text-lg">✓</span>`;
-        toast.className = "fixed top-5 left-1/2 -translate-x-1/2 z-50 max-w-sm w-[90%] bg-slate-900 text-white text-sm font-semibold px-5 py-4 rounded-xl shadow-xl flex items-center gap-3 transition-all duration-300 transform translate-y-0 opacity-100";
-      } else {
-        icon.innerHTML = `<span class="text-rose-500 text-lg">⚠</span>`;
-        toast.className = "fixed top-5 left-1/2 -translate-x-1/2 z-50 max-w-sm w-[90%] bg-slate-900 text-white text-sm font-semibold px-5 py-4 rounded-xl shadow-xl flex items-center gap-3 transition-all duration-300 transform translate-y-0 opacity-100";
-      }
-      
-      setTimeout(() => {
-        toast.className = "fixed top-5 left-1/2 -translate-x-1/2 z-50 max-w-sm w-[90%] bg-slate-900 text-white text-sm font-semibold px-5 py-4 rounded-xl shadow-xl flex items-center gap-3 transition-all duration-300 transform translate-y-[-100px] opacity-0";
-      }, 3000);
-    }
-
-    function capitalize(string) {
-      if (!string) return '';
-      return string.charAt(0).toUpperCase() + string.slice(1);
-    }
-  </script>
-</body>
-</html>
+    return obj;
+  });
+}
