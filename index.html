@@ -10,9 +10,9 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="Jerseys">
   
-  <!-- Favicon & Home Screen Icons (SVG Data URIs) -->
-  <link class="favicon" rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%232563EB'/><text x='15' y='72' font-family='Arial, sans-serif' font-size='65' font-weight='bold' fill='white'>👕</text></svg>">
-  <link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='22' fill='%232563EB'/><text x='15' y='72' font-family='Arial, sans-serif' font-size='65' font-weight='bold' fill='white'>👕</text></svg>">
+  <!-- Custom Logo Icon Configured for Favicon & Home Screen Shortcut -->
+  <link class="favicon" rel="icon" type="image/png" href="Jerseys.png">
+  <link class="apple-touch-icon" href="Jerseys.png">
 
   <!-- Tailwind CSS CDN -->
   <script src="https://cdn.tailwindcss.com"></script>
@@ -47,10 +47,9 @@
   <header class="bg-white border-b border-slate-200 sticky top-0 z-40 shadow-sm safe-top">
     <div class="px-4 h-14 flex items-center justify-between">
       <div class="flex items-center gap-2">
-        <div class="bg-blue-600 p-1.5 rounded-lg text-white">
-          <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M9.813 15.904L9 21m0 0l-.813-5.096L3 14.371l4.094-1.638 1.637-4.094L11.19 3q.3.435.617.874m0 0a15.82 15.82 0 013.123 5.364M11.808 3.874a15.821 15.821 0 00-3.123 5.364m3.123-5.364l1.094 3.123 3.123 1.094-3.123 1.094-1.094 3.123z" />
-          </svg>
+        <!-- Circular Image Logo with automatic fallback to classic SVG Icon -->
+        <div class="h-9 w-9 rounded-full overflow-hidden border border-slate-200 bg-slate-100 flex items-center justify-center shadow-sm">
+          <img src="Jerseys.png" alt="Logo" class="h-full w-full object-cover" onerror="this.onerror=null; this.parentElement.innerHTML='<div class=\'bg-blue-600 p-1.5 text-white h-full w-full flex items-center justify-center rounded-lg\'><svg class=\'w-5 h-5\' fill=\'none\' stroke=\'currentColor\' stroke-width=\'2\' viewBox=\'0 0 24 24\'><path stroke-linecap=\'round\' stroke-linejoin=\'round\' d=\'M9.813 15.904L9 21m0 0l-.813-5.096L3 14.371l4.094-1.638 1.637-4.094L11.19 3q.3.435.617.874m0 0a15.82 15.82 0 013.123 5.364M11.808 3.874a15.821 15.821 0 00-3.123 5.364m3.123-5.364l1.094 3.123 3.123 1.094-3.123 1.094-1.094 3.123z\' /></svg></div>'">
         </div>
         <h1 class="text-lg font-bold tracking-tight text-slate-800">Jersey Tracker</h1>
       </div>
@@ -308,10 +307,10 @@
       return String(sport || '').trim().toLowerCase();
     }
 
+    // Standardized parser to strip any decimal (.0) added automatically by Google Sheets on integers
     function normalizeNumber(num) {
       if (num === null || num === undefined) return '';
       let s = String(num).trim();
-      // Handle floats automatically added by Google Sheets formatting (e.g. "10.0" -> "10")
       if (!isNaN(s) && s.includes('.')) {
         const parsed = parseFloat(s);
         if (!isNaN(parsed)) {
@@ -330,7 +329,6 @@
       
       if (!appState.gasUrl) {
         document.getElementById('connection-banner').classList.remove('hidden');
-        // Load demo datasets
         appState.jerseys = [...DEMO_JERSEYS];
         appState.out = [...DEMO_OUT];
         appState.in = [...DEMO_IN];
@@ -345,7 +343,6 @@
       if (!appState.gasUrl) return;
       toggleLoading(true, "Fetching latest sheet data...");
       try {
-        // Appended cache buster to bypass Safari page caching on iPhones
         const response = await fetch(`${appState.gasUrl}?action=getData&_=${Date.now()}`);
         if (!response.ok) throw new Error('Network response returned an error status');
         const data = await response.json();
@@ -360,7 +357,6 @@
       } catch (err) {
         console.error("Cloud synchronization failed:", err);
         showToast("⚠ Failed to load from Sheets. Running fallback.", "error");
-        // Fallback
         appState.jerseys = [...DEMO_JERSEYS];
         appState.out = [...DEMO_OUT];
         appState.in = [...DEMO_IN];
@@ -394,7 +390,6 @@
         });
       }
       
-      // Sync UI straight away so the assignment lists update instantly without waiting for Sheets
       syncUI();
 
       if (!appState.gasUrl) {
@@ -406,14 +401,13 @@
       try {
         const response = await fetch(appState.gasUrl, {
           method: 'POST',
-          mode: 'no-cors', // Essential for GAS endpoints to complete securely on iOS without strict preflights
+          mode: 'no-cors',
           headers: {
             'Content-Type': 'application/json'
           },
           body: JSON.stringify({ action, data: payload })
         });
         
-        // Wait 2.5 seconds to read data again to allow Google Sheets transactions to fully write/commit
         setTimeout(() => {
           fetchCloudData();
         }, 2500);
@@ -438,11 +432,9 @@
         const jSport = normalizeSport(jersey.sport);
         const jNum = normalizeNumber(jersey.number);
         
-        // Utilized standardized normalizers to resolve type mismatch errors
         const outList = sortedOut.filter(o => normalizeSport(o.sport) === jSport && normalizeNumber(o.number) === jNum);
         const inList = sortedIn.filter(i => normalizeSport(i.sport) === jSport && normalizeNumber(i.number) === jNum);
         
-        // If checked out more times than returned, it is out.
         if (outList.length > inList.length) {
           const activeInstance = outList[outList.length - 1];
           activeLoans.push({
@@ -460,7 +452,6 @@
 
     // --- UI Synchronizer ---
     function syncUI() {
-      // 1. Populate Sports dropdowns
       const uniqueSports = [...new Set(appState.jerseys.map(j => j.sport))];
       
       const assignSportSelect = document.getElementById('assign-sport');
@@ -472,11 +463,9 @@
       assignSportSelect.innerHTML = uniqueSports.map(s => `<option value="${s}">${capitalize(s)}</option>`).join('');
       inventorySportSelect.innerHTML = uniqueSports.map(s => `<option value="${s}">${capitalize(s)}</option>`).join('');
       
-      // Restore previous selections or default
       if (uniqueSports.includes(prevAssignSportVal)) assignSportSelect.value = prevAssignSportVal;
       if (uniqueSports.includes(prevInventorySportVal)) inventorySportSelect.value = prevInventorySportVal;
       
-      // 2. Refresh lists based on the selections
       onAssignSportChange();
       renderCollectList();
       renderInventory();
@@ -487,12 +476,10 @@
       const selectedSport = document.getElementById('assign-sport').value;
       const numberSelect = document.getElementById('assign-number');
       
-      // Filter out active loans of this sport (they are out, hence cannot be assigned)
       const activeLoans = getActiveLoans();
       
       const availableJerseys = appState.jerseys.filter(j => {
         if (normalizeSport(j.sport) !== normalizeSport(selectedSport)) return false;
-        // Verify it isn't currently out using type-safe normalizers
         return !activeLoans.some(o => normalizeSport(o.sport) === normalizeSport(selectedSport) && normalizeNumber(o.number) === normalizeNumber(j.number));
       });
       
@@ -572,7 +559,6 @@
       const inCountEl = document.getElementById('inv-in-count');
       const outCountEl = document.getElementById('inv-out-count');
       
-      // Filter current sport jerseys
       const sportJerseys = appState.jerseys.filter(j => normalizeSport(j.sport) === normalizeSport(selectedSport));
       
       const outJerseys = [];
@@ -590,7 +576,6 @@
       inCountEl.textContent = inJerseys.length;
       outCountEl.textContent = outJerseys.length;
       
-      // Render available list
       if (inJerseys.length === 0) {
         inListEl.innerHTML = `<p class="text-center text-xs text-slate-400 py-4 font-medium">None available</p>`;
       } else {
@@ -602,7 +587,6 @@
         `).join('');
       }
       
-      // Render loaned out list
       if (outJerseys.length === 0) {
         outListEl.innerHTML = `<p class="text-center text-xs text-slate-400 py-4 font-medium">None assigned</p>`;
       } else {
@@ -631,7 +615,6 @@
         return;
       }
       
-      // Find size based on selected jersey number
       const opt = document.querySelector(`#assign-number option[value="${number}"]`);
       const size = opt ? opt.getAttribute('data-size') : "M";
       
@@ -678,7 +661,6 @@
         }
       });
       
-      // Run quick UI updates specifically on screens load to guarantee real-time updates
       if (screenId === 'collect') renderCollectList();
       if (screenId === 'inventory') renderInventory();
     }
